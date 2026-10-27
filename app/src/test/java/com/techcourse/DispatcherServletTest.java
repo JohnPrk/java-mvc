@@ -1,5 +1,6 @@
 package com.techcourse;
 
+import com.interface21.webmvc.servlet.DispatcherServlet;
 import com.techcourse.controller.UserSession;
 import com.techcourse.repository.InMemoryUserRepository;
 import jakarta.servlet.RequestDispatcher;
@@ -9,6 +10,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -20,16 +24,16 @@ import static org.mockito.Mockito.when;
 
 class DispatcherServletTest {
 
-    private DispatcherServlet servlet;
+    private TestDispatcherServlet servlet;
 
     @BeforeEach
     void setUp() {
-        servlet = new DispatcherServlet();
+        servlet = new TestDispatcherServlet();
         servlet.init();
     }
 
     @Test
-    void 기존_컨트롤러가_반환한_JSP로_forward한다() throws Exception {
+    void 홈_컨트롤러가_반환한_JSP로_forward한다() throws Exception {
         final var request = createRequest("GET", "/");
         final var response = mock(HttpServletResponse.class);
         final var dispatcher = mock(RequestDispatcher.class);
@@ -42,7 +46,7 @@ class DispatcherServletTest {
     }
 
     @Test
-    void 기존_로그아웃_처리_후_홈으로_redirect한다() throws Exception {
+    void 어노테이션_로그아웃_처리_후_홈으로_redirect한다() throws Exception {
         final var request = createRequest("GET", "/logout");
         final var response = mock(HttpServletResponse.class);
         final var session = mock(HttpSession.class);
@@ -83,7 +87,7 @@ class DispatcherServletTest {
     }
 
     @Test
-    void 기존_로그인_화면도_함께_동작한다() throws Exception {
+    void 어노테이션_로그인_화면을_조회한다() throws Exception {
         final var request = createRequest("GET", "/login/view");
         final var response = mock(HttpServletResponse.class);
         final var dispatcher = mock(RequestDispatcher.class);
@@ -116,7 +120,7 @@ class DispatcherServletTest {
     }
 
     @Test
-    void 컨텍스트_경로가_있어도_기존_컨트롤러를_찾는다() throws Exception {
+    void 컨텍스트_경로가_있어도_홈_컨트롤러를_찾는다() throws Exception {
         final var request = createRequest("GET", "/mvc/");
         final var response = mock(HttpServletResponse.class);
         final var dispatcher = mock(RequestDispatcher.class);
@@ -167,6 +171,75 @@ class DispatcherServletTest {
                 .hasRootCauseMessage("컨트롤러 실행 실패");
     }
 
+    @Test
+    void 사용자_조회는_비밀번호_없이_JSON을_반환한다() throws Exception {
+        final var request = createRequest("GET", "/api/user");
+        final var response = mock(HttpServletResponse.class);
+        final var output = new StringWriter();
+        when(request.getParameter("account")).thenReturn("gugu");
+        when(response.getWriter()).thenReturn(new PrintWriter(output));
+
+        servlet.service(request, response);
+
+        verify(response).setContentType("application/json;charset=UTF-8");
+        assertThat(output.toString()).isEqualTo("{\"account\":\"gugu\"}");
+        assertThat(output.toString()).doesNotContain("password");
+    }
+
+    @Test
+    void 없는_사용자를_조회하면_404와_JSON_오류를_반환한다() throws Exception {
+        final var request = createRequest("GET", "/api/user");
+        final var response = mock(HttpServletResponse.class);
+        final var output = new StringWriter();
+        when(request.getParameter("account")).thenReturn("missing-step3-user");
+        when(response.getWriter()).thenReturn(new PrintWriter(output));
+
+        servlet.service(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertThat(output.toString()).contains("사용자를 찾을 수 없습니다.");
+    }
+
+    @Test
+    void 계정_없이_사용자를_조회하면_400을_반환한다() throws Exception {
+        final var request = createRequest("GET", "/api/user");
+        final var response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
+
+        servlet.service(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+    }
+
+    @Test
+    void 올바른_비밀번호로_로그인하면_세션을_저장하고_redirect한다() throws Exception {
+        final var request = createRequest("POST", "/login");
+        final var response = mock(HttpServletResponse.class);
+        final var session = mock(HttpSession.class);
+        when(request.getSession()).thenReturn(session);
+        when(request.getParameter("account")).thenReturn("gugu");
+        when(request.getParameter("password")).thenReturn("password");
+
+        servlet.service(request, response);
+
+        verify(session).setAttribute(UserSession.SESSION_KEY,
+                InMemoryUserRepository.findByAccount("gugu").orElseThrow());
+        verify(response).sendRedirect("/index.jsp");
+    }
+
+    @Test
+    void 잘못된_비밀번호로_로그인하면_실패_화면으로_redirect한다() throws Exception {
+        final var request = createRequest("POST", "/login");
+        final var response = mock(HttpServletResponse.class);
+        when(request.getSession()).thenReturn(mock(HttpSession.class));
+        when(request.getParameter("account")).thenReturn("gugu");
+        when(request.getParameter("password")).thenReturn("wrong-password");
+
+        servlet.service(request, response);
+
+        verify(response).sendRedirect("/401.jsp");
+    }
+
     private HttpServletRequest createRequest(final String method, final String requestURI) {
         final var request = mock(HttpServletRequest.class);
         when(request.getMethod()).thenReturn(method);
@@ -174,4 +247,17 @@ class DispatcherServletTest {
         when(request.getContextPath()).thenReturn("");
         return request;
     }
+
+    private static class TestDispatcherServlet extends DispatcherServlet {
+
+        TestDispatcherServlet() {
+            super("com.techcourse.controller");
+        }
+
+        @Override
+        public void service(final HttpServletRequest request, final HttpServletResponse response) throws ServletException {
+            super.service(request, response);
+        }
+    }
+
 }
